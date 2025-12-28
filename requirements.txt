@@ -3,4 +3,5 @@ pandas==2.2.0
 numpy
 scikit-learn
 joblib
-psycopg2-binary
+psycopg2-binary==2.9.9
+
