@@ -1,6 +1,23 @@
 import streamlit as st
+import mysql.connector # Library untuk hubungin ke DB
 import pandas as pd
 from datetime import datetime
+
+import joblib
+import numpy as np
+from pathlib import Path
+
+# Fungsi untuk load model agar tidak berat (di-cache)
+@st.cache_resource
+def load_model():
+    base_dir = Path(__file__).resolve().parent
+    model_path = base_dir / "model_final.pkl"
+    poly_path = base_dir / "poly_transformer.pkl"
+    model = joblib.load(model_path)
+    poly = joblib.load(poly_path)
+    return model, poly
+
+model, poly = load_model()
 
 # Konfigurasi halaman
 st.set_page_config(
@@ -161,6 +178,34 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+def get_db_connection():
+    return mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="",
+        database="prediksi_nilai"
+    )
+
+# Fungsi untuk simpan ke database
+def simpan_ke_db(user_id, presensi, uts, uas, tugas, jam, hasil, grade):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Simpan ke tabel data_input
+    # 1. Simpan ke data_input
+    query_input = """INSERT INTO data_input (user_id, presensi, nilai_uts, nilai_uas, nilai_tugas, jam_belajar) 
+                     VALUES (%s, %s, %s, %s, %s, %s)"""
+    cursor.execute(query_input, (user_id, presensi, uts, uas, tugas, jam))
+    id_input_terakhir = cursor.lastrowid
+    
+    # Simpan ke tabel hasil_prediksi
+    # 2. Simpan ke hasil_prediksi (tambahkan kolom grade)
+    query_hasil = "INSERT INTO hasil_prediksi (user_id, id_input, nilai_prediksi, grade) VALUES (%s, %s, %s, %s)"
+    cursor.execute(query_hasil, (user_id, id_input_terakhir, hasil, grade))
+    
+    conn.commit()
+    conn.close()
+
 # Inisialisasi session state
 if 'page' not in st.session_state:
     st.session_state.page = 'login'
@@ -178,28 +223,37 @@ def go_to_page(page_name):
 
 # Fungsi login
 def login(email, password):
-    if email in st.session_state.users_db:
-        if st.session_state.users_db[email]['password'] == password:
-            st.session_state.user = st.session_state.users_db[email]
-            go_to_page('prediction')
-            return True
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    # Cari user berdasarkan email dan password
+    query = "SELECT * FROM login_users WHERE email = %s AND password = %s"
+    cursor.execute(query, (email, password))
+    user = cursor.fetchone()
+    conn.close()
+    
+    if user:
+        st.session_state.user = user # id_user sekarang ada di sini
+        go_to_page('prediction')
+        return True
     return False
 
 # Fungsi register
 def register(nama, nis, kelas, email, password):
-    if email in st.session_state.users_db:
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        query = "INSERT INTO login_users (nama_lengkap, nis, kelas, email, password) VALUES (%s, %s, %s, %s, %s)"
+        cursor.execute(query, (nama, nis, kelas, email, password))
+        conn.commit()
+        new_id = cursor.lastrowid
+        conn.close()
+        
+        # Otomatis login setelah daftar
+        st.session_state.user = {'id_user': new_id, 'nama_lengkap': nama, 'email': email, 'nis': nis, 'kelas': kelas}
+        go_to_page('prediction')
+        return True
+    except:
         return False
-    st.session_state.users_db[email] = {
-        'nama': nama,
-        'nis': nis,
-        'kelas': kelas,
-        'email': email,
-        'password': password
-    }
-    st.session_state.user = st.session_state.users_db[email]
-    go_to_page('prediction')
-    return True
-
 # Fungsi logout
 def logout():
     st.session_state.user = None
@@ -279,7 +333,7 @@ def prediction_page():
     col_header1, col_header2 = st.columns([3, 1])
     with col_header1:
         st.markdown(f"<h2 style='margin:0; color:#1e293b;'>🎓 Prediksi Nilai Akhir Semester</h2>", unsafe_allow_html=True)
-        st.markdown(f"<p style='color:#64748b; margin:0;'>Selamat datang, {st.session_state.user['nama']}</p>", unsafe_allow_html=True)
+        st.markdown(f"<p style='color:#64748b; margin:0;'>Selamat datang, {st.session_state.user['nama_lengkap']}</p>", unsafe_allow_html=True)
     with col_header2:
         if st.button("↪ Keluar", use_container_width=True):
             logout()
@@ -297,40 +351,54 @@ def prediction_page():
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("### 📖 Nilai UTS (0-100)")
-            uts = st.number_input("UTS", min_value=0.0, max_value=100.0, value=0.0, step=1.0, label_visibility="collapsed")
-            st.caption("Bobot: 30%")
+            st.markdown("### 📖 Nilai UTS (0-40)")
+            uts = st.number_input("UTS", min_value=0.0, max_value=40.0, value=0.0, step=1.0, label_visibility="collapsed")
+            st.caption("Bobot: 10%")
             
-            st.markdown("### 📝 Nilai Tugas (0-100)")
-            tugas = st.number_input("Tugas", min_value=0.0, max_value=100.0, value=0.0, step=1.0, label_visibility="collapsed")
-            st.caption("Bobot: 25%")
+            st.markdown("### 📝 Nilai Tugas (0-10)")
+            tugas = st.number_input("Tugas", min_value=0.0, max_value=10.0, value=0.0, step=1.0, label_visibility="collapsed")
+            st.caption("Bobot: 46%")
+
+            st.markdown("### 📅 Presensi (0-100%)")
+            presensi = st.slider("Persentase Presensi", 0, 100, 100, label_visibility="collapsed")
         
         with col2:
-            st.markdown("### 📈 Nilai UAS (0-100)")
-            uas = st.number_input("UAS", min_value=0.0, max_value=100.0, value=0.0, step=1.0, label_visibility="collapsed")
-            st.caption("Bobot: 35%")
+            st.markdown("### 📈 Nilai UAS (0-40)")
+            uas = st.number_input("UAS", min_value=0.0, max_value=40.0, value=0.0, step=1.0, label_visibility="collapsed")
+            st.caption("Bobot: 10%")
             
             st.markdown("### 🕐 Jam Belajar per Hari")
             jam = st.number_input("Jam Belajar", min_value=0.0, max_value=24.0, value=0.0, step=0.5, label_visibility="collapsed")
-            st.caption("Bonus maksimal: 10 poin")
+            st.caption("Bobot: 27%")
         
         # Info box
         st.markdown("""
         <div class="info-box">
             <div class="info-title">Informasi Perhitungan:</div>
-            <div class="info-item">• Nilai Akhir = (UTS × 30%) + (UAS × 35%) + (Tugas × 25%) + Bonus Jam Belajar</div>
-            <div class="info-item">• Setiap 1 jam belajar per hari = 1 poin bonus (maksimal 10 poin)</div>
+            <div class="info-item">• Nilai Akhir = (UTS × 10%) + (UAS × 10%) + (Tugas × 46%) + (Jam Belajar × 27%) + Presensi</div>
             <div class="info-item">• Grade A: 90-100 | B: 80-89 | C: 70-79 | D: 60-69 | E: 0-59</div>
         </div>
         """, unsafe_allow_html=True)
         
         if st.button("Hitung Prediksi", use_container_width=True):
             if uts > 0 or uas > 0 or tugas > 0:
-                # Hitung nilai akhir
-                bonus = min(jam, 10)
-                nilai_akhir = (uts * 0.30) + (uas * 0.35) + (tugas * 0.25) + bonus
-                nilai_akhir = min(nilai_akhir, 100)  # Maksimal 100
+                # --- LOGIKA MODEL ML ---
+                # 1. Definisikan bonus (agar metric di bawah tidak error)
+                bonus = jam # atau sesuaikan: min(jam, 10)
+
+                # 2. Susun data input (Urutan: Presensi, UTS, UAS, Jam Belajar, Tugas)
+                input_data = np.array([[presensi, uts, uas, jam, tugas]])
                 
+                # 3. Transformasi ke Polinomial
+                input_poly = poly.transform(input_data)
+                
+                # 4. Prediksi dengan Model
+                prediksi = model.predict(input_poly)
+                nilai_akhir = float(prediksi[0])
+                
+                # Batasi nilai 0-100
+                nilai_akhir = max(0, min(nilai_akhir, 100))
+
                 # Tentukan grade
                 if nilai_akhir >= 90:
                     grade = "A"
@@ -358,6 +426,14 @@ def prediction_page():
                     'nilai_akhir': nilai_akhir,
                     'grade': grade
                 })
+
+                # TAMBAHKAN INI: Simpan ke MySQL permanen
+                try:
+                    user_id_sekarang = st.session_state.user.get('id_user', 1) # Kita asumsikan user_id didapat dari database saat login (lihat poin 2)
+                    simpan_ke_db(user_id_sekarang, presensi, uts, uas, tugas, jam, nilai_akhir, grade)
+                    st.toast("Data berhasil disimpan ke Database!", icon="💾")
+                except Exception as e:
+                    st.error(f"Gagal simpan ke database: {e}")
                 
                 # Tampilkan hasil
                 st.markdown(f"""
@@ -385,19 +461,25 @@ def prediction_page():
     # Tab Riwayat
     with tab2:
         st.markdown('<h2 class="section-title">Riwayat Prediksi</h2>', unsafe_allow_html=True)
-        st.markdown('<p class="subtitle">Daftar prediksi nilai yang pernah Anda hitung</p>', unsafe_allow_html=True)
         
-        if len(st.session_state.history) == 0:
-            st.markdown('<div class="icon-large">📋</div>', unsafe_allow_html=True)
-            st.markdown('<h3 style="text-align:center; color:#64748b;">Belum ada riwayat prediksi</h3>', unsafe_allow_html=True)
-            st.markdown('<p style="text-align:center; color:#94a3b8;">Mulai hitung prediksi nilai Anda di tab Prediksi</p>', unsafe_allow_html=True)
+        conn = get_db_connection()
+        # Query untuk menggabungkan input dan hasil berdasarkan user yang login
+        query = """
+            SELECT h.tanggal_prediksi AS Tanggal, d.nilai_uts AS UTS, d.nilai_uas AS UAS, 
+                   d.nilai_tugas AS Tugas, d.jam_belajar AS Jam, 
+                   h.nilai_prediksi AS 'Nilai Akhir', h.grade AS Grade
+            FROM hasil_prediksi h
+            JOIN data_input d ON h.id_input = d.id_input
+            WHERE h.user_id = %s
+            ORDER BY h.tanggal_prediksi DESC
+        """
+        df_riwayat = pd.read_sql(query, conn, params=(st.session_state.user['id_user'],))
+        conn.close()
+
+        if df_riwayat.empty:
+            st.info("Belum ada riwayat prediksi untuk akun ini.")
         else:
-            # Tampilkan sebagai tabel
-            df = pd.DataFrame(st.session_state.history)
-            df = df[['tanggal', 'uts', 'uas', 'tugas', 'jam_belajar', 'nilai_akhir', 'grade']]
-            df.columns = ['Tanggal', 'UTS', 'UAS', 'Tugas', 'Jam Belajar', 'Nilai Akhir', 'Grade']
-            
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df_riwayat, use_container_width=True, hide_index=True)
     
     # Tab Profil
     with tab3:
@@ -410,7 +492,7 @@ def prediction_page():
             st.markdown(f"""
             <div class="profile-card">
                 <div class="profile-label">Nama Lengkap</div>
-                <div class="profile-value">{st.session_state.user['nama']}</div>
+                <div class="profile-value">{st.session_state.user['nama_lengkap']}</div>
             </div>
             """, unsafe_allow_html=True)
             

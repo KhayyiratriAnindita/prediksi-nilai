@@ -1,2 +1,6 @@
 streamlit==1.31.0
 pandas==2.2.0
+numpy
+scikit-learn
+joblib
+mysql-connector-python
