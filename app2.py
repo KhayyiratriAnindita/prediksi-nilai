@@ -1,5 +1,5 @@
 import streamlit as st
-import mysql.connector # Library untuk hubungin ke DB
+import psycopg2
 import pandas as pd
 from datetime import datetime
 
@@ -178,12 +178,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-def get_db_connection():
-    return mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="",
-        database="prediksi_nilai"
+def get_db_connection(): 
+    return psycopg2.connect( 
+        host=st.secrets["db"]["host"], 
+        user=st.secrets["db"]["user"], 
+        password=st.secrets["db"]["password"], 
+        dbname=st.secrets["db"]["database"] 
     )
 
 # Fungsi untuk simpan ke database
