@@ -1,24 +1,11 @@
-import streamlit as st
-import psycopg2
-import psycopg2.extras
-import pandas as pd
-from datetime import datetime
-
-import joblib
-import numpy as np
-from pathlib import Path
-
-# Fungsi untuk load model agar tidak berat (di-cache)
-@st.cache_resource
-def load_model():
-    base_dir = Path(__file__).resolve().parent
-    model_path = base_dir / "model_final.pkl"
-    poly_path = base_dir / "poly_transformer.pkl"
-    model = joblib.load(model_path)
-    poly = joblib.load(poly_path)
-    return model, poly
-
-model, poly = load_model()
+from datetime import datetime 
+import numpy as np 
+import pandas as pd 
+from pathlib import Path 
+import joblib 
+import streamlit as st 
+import psycopg2 
+import psycopg2.extras 
 
 # Konfigurasi halaman
 st.set_page_config(
@@ -27,6 +14,18 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# Cache model biar nggak berat 
+@st.cache_resource 
+def load_model(): 
+    base_dir = Path(__file__).resolve().parent 
+    model_path = base_dir / "model_final.pkl" 
+    poly_path = base_dir / "poly_transformer.pkl" 
+    model = joblib.load(model_path) 
+    poly = joblib.load(poly_path) 
+    return model, poly 
+
+model, poly = load_model()
 
 # Custom CSS
 st.markdown("""
@@ -179,42 +178,36 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Cache koneksi database biar nggak hang 
+@st.cache_resource 
 def get_db_connection(): 
     return psycopg2.connect( 
         host=st.secrets["db"]["host"], 
         user=st.secrets["db"]["user"], 
         password=st.secrets["db"]["password"], 
-        dbname=st.secrets["db"]["database"] 
+        dbname=st.secrets["db"]["database"], 
+        sslmode="require" 
     )
 
 # Fungsi untuk simpan ke database
 def simpan_ke_db(user_id, presensi, uts, uas, tugas, jam, hasil, grade):
     conn = get_db_connection()
-    cursor = conn.cursor()
+    with conn.cursor() as cursor:
+        # Simpan ke tabel data_input
+        query_input = """INSERT INTO data_input (user_id, presensi, nilai_uts, nilai_uas, nilai_tugas, jam_belajar) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id_input""" 
+        cursor.execute(query_input, (user_id, presensi, uts, uas, tugas, jam)) 
+        id_input_terakhir = cursor.fetchone()[0]
     
-    # Simpan ke tabel data_input
-    # 1. Simpan ke data_input
-    query_input = """INSERT INTO data_input (user_id, presensi, nilai_uts, nilai_uas, nilai_tugas, jam_belajar) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id_input""" 
-    cursor.execute(query_input, (user_id, presensi, uts, uas, tugas, jam)) 
-    id_input_terakhir = cursor.fetchone()[0]
-    
-    # Simpan ke tabel hasil_prediksi
-    # 2. Simpan ke hasil_prediksi (tambahkan kolom grade)
-    query_hasil = "INSERT INTO hasil_prediksi (user_id, id_input, nilai_prediksi, grade) VALUES (%s, %s, %s, %s)"
-    cursor.execute(query_hasil, (user_id, id_input_terakhir, hasil, grade))
-    
-    conn.commit()
-    conn.close()
+        # Simpan ke tabel hasil_prediksi
+        query_hasil = "INSERT INTO hasil_prediksi (user_id, id_input, nilai_prediksi, grade) VALUES (%s, %s, %s, %s)"
+        cursor.execute(query_hasil, (user_id, id_input_terakhir, hasil, grade))
+        conn.commit()
 
 # Inisialisasi session state
-if 'page' not in st.session_state:
-    st.session_state.page = 'login'
-if 'user' not in st.session_state:
-    st.session_state.user = None
-if 'history' not in st.session_state:
-    st.session_state.history = []
-if 'users_db' not in st.session_state:
-    st.session_state.users_db = {}
+if 'page' not in st.session_state: st.session_state.page = 'login'
+if 'user' not in st.session_state: st.session_state.user = None
+if 'history' not in st.session_state: st.session_state.history = []
+if 'users_db' not in st.session_state: st.session_state.users_db = {}
 
 # Fungsi navigasi
 def go_to_page(page_name):
@@ -224,12 +217,11 @@ def go_to_page(page_name):
 # Fungsi login
 def login(email, password):
     conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    # Cari user berdasarkan email dan password
-    query = "SELECT * FROM login_users WHERE email = %s AND password = %s"
-    cursor.execute(query, (email, password))
-    user = cursor.fetchone()
-    conn.close()
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+        # Cari user berdasarkan email dan password
+        query = "SELECT * FROM login_users WHERE email = %s AND password = %s"
+        cursor.execute(query, (email, password))
+        user = cursor.fetchone()
     
     if user:
         st.session_state.user = user # id_user sekarang ada di sini
@@ -241,12 +233,11 @@ def login(email, password):
 def register(nama, nis, kelas, email, password):
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-        query = """INSERT INTO login_users (nama_lengkap, nis, kelas, email, password) VALUES (%s, %s, %s, %s, %s) RETURNING id_user""" 
-        cursor.execute(query, (nama, nis, kelas, email, password))
-        conn.commit()
-        new_id = cursor.fetchone()[0]
-        conn.close()
+        with conn.cursor() as cursor:
+            query = """INSERT INTO login_users (nama_lengkap, nis, kelas, email, password) VALUES (%s, %s, %s, %s, %s) RETURNING id_user""" 
+            cursor.execute(query, (nama, nis, kelas, email, password))
+            conn.commit()
+            new_id = cursor.fetchone()[0]
         
         # Otomatis login setelah daftar
         st.session_state.user = {'id_user': new_id, 'nama_lengkap': nama, 'email': email, 'nis': nis, 'kelas': kelas}
@@ -448,33 +439,31 @@ def prediction_page():
                 # Detail breakdown
                 col_detail1, col_detail2, col_detail3, col_detail4 = st.columns(4)
                 with col_detail1:
-                    st.metric("UTS (30%)", f"{uts * 0.30:.2f}")
+                    st.metric("UTS (10%)", f"{uts * 0.10:.2f}")
                 with col_detail2:
-                    st.metric("UAS (35%)", f"{uas * 0.35:.2f}")
+                    st.metric("UAS (10%)", f"{uas * 0.10:.2f}")
                 with col_detail3:
-                    st.metric("Tugas (25%)", f"{tugas * 0.25:.2f}")
+                    st.metric("Tugas (46%)", f"{tugas * 0.46:.2f}")
                 with col_detail4:
-                    st.metric("Bonus", f"{bonus:.2f}")
+                    st.metric("Jam Belajar (27%)", f"{jam * 0.27:.2f}")
             else:
                 st.warning("Mohon isi minimal satu nilai!")
     
     # Tab Riwayat
     with tab2:
         st.markdown('<h2 class="section-title">Riwayat Prediksi</h2>', unsafe_allow_html=True)
-        
         conn = get_db_connection()
-        # Query untuk menggabungkan input dan hasil berdasarkan user yang login
         query = """
             SELECT h.tanggal_prediksi AS Tanggal, d.nilai_uts AS UTS, d.nilai_uas AS UAS, 
                    d.nilai_tugas AS Tugas, d.jam_belajar AS Jam, 
-                   h.nilai_prediksi AS 'Nilai Akhir', h.grade AS Grade
+                   h.nilai_prediksi AS "Nilai Akhir", h.grade AS Grade
             FROM hasil_prediksi h
             JOIN data_input d ON h.id_input = d.id_input
             WHERE h.user_id = %s
             ORDER BY h.tanggal_prediksi DESC
         """
+        # Gunakan pandas dengan cara ini agar lebih stabil
         df_riwayat = pd.read_sql(query, conn, params=(st.session_state.user['id_user'],))
-        conn.close()
 
         if df_riwayat.empty:
             st.info("Belum ada riwayat prediksi untuk akun ini.")
