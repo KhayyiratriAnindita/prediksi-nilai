@@ -1,5 +1,6 @@
 import streamlit as st
 import psycopg2
+import psycopg2.extras
 import pandas as pd
 from datetime import datetime
 
@@ -193,10 +194,9 @@ def simpan_ke_db(user_id, presensi, uts, uas, tugas, jam, hasil, grade):
     
     # Simpan ke tabel data_input
     # 1. Simpan ke data_input
-    query_input = """INSERT INTO data_input (user_id, presensi, nilai_uts, nilai_uas, nilai_tugas, jam_belajar) 
-                     VALUES (%s, %s, %s, %s, %s, %s)"""
-    cursor.execute(query_input, (user_id, presensi, uts, uas, tugas, jam))
-    id_input_terakhir = cursor.lastrowid
+    query_input = """INSERT INTO data_input (user_id, presensi, nilai_uts, nilai_uas, nilai_tugas, jam_belajar) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id_input""" 
+    cursor.execute(query_input, (user_id, presensi, uts, uas, tugas, jam)) 
+    id_input_terakhir = cursor.fetchone()[0]
     
     # Simpan ke tabel hasil_prediksi
     # 2. Simpan ke hasil_prediksi (tambahkan kolom grade)
@@ -224,7 +224,7 @@ def go_to_page(page_name):
 # Fungsi login
 def login(email, password):
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     # Cari user berdasarkan email dan password
     query = "SELECT * FROM login_users WHERE email = %s AND password = %s"
     cursor.execute(query, (email, password))
@@ -242,10 +242,10 @@ def register(nama, nis, kelas, email, password):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        query = "INSERT INTO login_users (nama_lengkap, nis, kelas, email, password) VALUES (%s, %s, %s, %s, %s)"
+        query = """INSERT INTO login_users (nama_lengkap, nis, kelas, email, password) VALUES (%s, %s, %s, %s, %s) RETURNING id_user""" 
         cursor.execute(query, (nama, nis, kelas, email, password))
         conn.commit()
-        new_id = cursor.lastrowid
+        new_id = cursor.fetchone()[0]
         conn.close()
         
         # Otomatis login setelah daftar
