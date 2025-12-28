@@ -243,7 +243,8 @@ def register(nama, nis, kelas, email, password):
         st.session_state.user = {'id_user': new_id, 'nama_lengkap': nama, 'email': email, 'nis': nis, 'kelas': kelas}
         go_to_page('prediction')
         return True
-    except:
+    except Exception as e:
+        st.error(f"Error Database: {e}") # Tambahkan ini agar tahu errornya apa
         return False
 # Fungsi logout
 def logout():
