@@ -536,6 +536,13 @@ def prediction_page():
         # Gunakan pandas dengan cara ini agar lebih stabil
         df_riwayat = pd.read_sql(query, conn, params=(st.session_state.user['id_user'],))
 
+        if not df_riwayat.empty:
+            df_riwayat["nilai_akhir"] = df_riwayat["nilai_akhir"].astype(float)
+            df_riwayat["uts"] = df_riwayat["uts"].astype(float)
+            df_riwayat["uas"] = df_riwayat["uas"].astype(float)
+            df_riwayat["tugas"] = df_riwayat["tugas"].astype(float)
+            df_riwayat["jam"] = df_riwayat["jam"].astype(float)
+
         if df_riwayat.empty:
             st.info("Belum ada riwayat prediksi untuk akun ini.")
         else:
