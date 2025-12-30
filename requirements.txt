@@ -3,4 +3,3 @@ pandas==2.2.0
 numpy
 scikit-learn
 joblib
-psycopg2

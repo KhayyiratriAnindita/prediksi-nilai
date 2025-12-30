@@ -1,13 +1,16 @@
-from datetime import datetime 
-import numpy as np 
-import pandas as pd 
-from pathlib import Path 
-import joblib 
-import streamlit as st 
-import psycopg2 
-import psycopg2.extras 
+from datetime import datetime
+import time
+import numpy as np
+import pandas as pd
+from pathlib import Path
+import joblib
+import streamlit as st
+import psycopg2
+import psycopg2.extras
 
+# ===============================
 # Konfigurasi halaman
+# ===============================
 st.set_page_config(
     page_title="Prediksi Nilai Akhir Semester",
     page_icon="🎓",
@@ -15,15 +18,15 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Cache model biar nggak berat 
-@st.cache_resource 
-def load_model(): 
-    base_dir = Path(__file__).resolve().parent 
-    model_path = base_dir / "model_final.pkl" 
-    poly_path = base_dir / "poly_transformer.pkl" 
-    model = joblib.load(model_path) 
-    poly = joblib.load(poly_path) 
-    return model, poly 
+# ===============================
+# Cache MODEL (AMAN)
+# ===============================
+@st.cache_resource
+def load_model():
+    base_dir = Path(__file__).resolve().parent
+    model = joblib.load(base_dir / "model_final.pkl")
+    poly = joblib.load(base_dir / "poly_transformer.pkl")
+    return model, poly
 
 model, poly = load_model()
 
@@ -178,82 +181,145 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Cache koneksi database biar nggak hang 
-@st.cache_resource 
-def get_db_connection(): 
-    return psycopg2.connect( 
-        host=st.secrets["db"]["host"], 
-        user=st.secrets["db"]["user"], 
-        password=st.secrets["db"]["password"], 
-        dbname=st.secrets["db"]["database"], 
-        sslmode="require" 
+# ===============================
+# KONEKSI DATABASE (TIDAK DICACHE)
+# ===============================
+def get_db_connection():
+    return psycopg2.connect(
+        host=st.secrets["db"]["host"],
+        user=st.secrets["db"]["user"],
+        password=st.secrets["db"]["password"],
+        dbname=st.secrets["db"]["database"],
+        sslmode="require",
+        connect_timeout=5
     )
 
-# Fungsi untuk simpan ke database
-def simpan_ke_db(user_id, presensi, uts, uas, tugas, jam, hasil, grade):
-    conn = get_db_connection()
-    with conn.cursor() as cursor:
-        # Simpan ke tabel data_input
-        query_input = """INSERT INTO data_input (user_id, presensi, nilai_uts, nilai_uas, nilai_tugas, jam_belajar) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id_input""" 
-        cursor.execute(query_input, (user_id, presensi, uts, uas, tugas, jam)) 
-        id_input_terakhir = cursor.fetchone()[0]
-    
-        # Simpan ke tabel hasil_prediksi
-        query_hasil = "INSERT INTO hasil_prediksi (user_id, id_input, nilai_prediksi, grade) VALUES (%s, %s, %s, %s)"
-        cursor.execute(query_hasil, (user_id, id_input_terakhir, hasil, grade))
-        conn.commit()
-
-# Inisialisasi session state
-if 'page' not in st.session_state: st.session_state.page = 'login'
-if 'user' not in st.session_state: st.session_state.user = None
-if 'history' not in st.session_state: st.session_state.history = []
-if 'users_db' not in st.session_state: st.session_state.users_db = {}
-
-# Fungsi navigasi
-def go_to_page(page_name):
-    st.session_state.page = page_name
-    st.rerun()
-
-# Fungsi login
-def login(email, password):
-    conn = get_db_connection()
-    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
-        # Cari user berdasarkan email dan password
-        query = "SELECT * FROM login_users WHERE email = %s AND password = %s"
-        cursor.execute(query, (email, password))
-        user = cursor.fetchone()
-    
-    if user:
-        st.session_state.user = user # id_user sekarang ada di sini
-        go_to_page('prediction')
-        return True
+# ===============================
+# WAKE UP NEON
+# ===============================
+def wake_up_db(retries=5):
+    for _ in range(retries):
+        try:
+            conn = get_db_connection()
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+            conn.close()
+            return True
+        except psycopg2.OperationalError:
+            time.sleep(2)
     return False
 
-# Fungsi register
-def register(nama, nis, kelas, email, password):
+# SIMPAN KE DATABASE
+def simpan_ke_db(user_id, presensi, uts, uas, tugas, jam, hasil, grade):
+    conn = None
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            query = """INSERT INTO login_users (nama_lengkap, nis, kelas, email, password) VALUES (%s, %s, %s, %s, %s) RETURNING id_user""" 
-            cursor.execute(query, (nama, nis, kelas, email, password))
+            cursor.execute(
+                """INSERT INTO data_input
+                (user_id, presensi, nilai_uts, nilai_uas, nilai_tugas, jam_belajar)
+                VALUES (%s,%s,%s,%s,%s,%s)
+                RETURNING id_input""",
+                (user_id, presensi, uts, uas, tugas, jam)
+            )
+            id_input = cursor.fetchone()[0]
+
+            cursor.execute(
+                """INSERT INTO hasil_prediksi
+                (user_id, id_input, nilai_prediksi, grade)
+                VALUES (%s,%s,%s,%s)""",
+                (user_id, id_input, hasil, grade)
+            )
             conn.commit()
-            new_id = cursor.fetchone()[0]
-        
-        # Otomatis login setelah daftar
-        st.session_state.user = {'id_user': new_id, 'nama_lengkap': nama, 'email': email, 'nis': nis, 'kelas': kelas}
+    finally:
+        if conn:
+            conn.close()
+
+# SESSION STATE
+if 'page' not in st.session_state:
+    st.session_state.page = 'login'
+if 'user' not in st.session_state:
+    st.session_state.user = None
+if 'history' not in st.session_state: 
+    st.session_state.history = []
+if 'users_db' not in st.session_state: 
+    st.session_state.users_db = {}
+
+# NAVIGASI
+def go_to_page(page):
+    st.session_state.page = page
+    st.rerun()
+
+# LOGIN (FIXED)
+def login(email, password):
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+            cursor.execute(
+                "SELECT * FROM login_users WHERE email=%s AND password=%s",
+                (email, password)
+            )
+            user = cursor.fetchone()
+
+        if user:
+            st.session_state.user = user
+            go_to_page('prediction')
+            return True
+        return False
+
+    except psycopg2.InterfaceError:
+        st.error("Koneksi database terputus. Silakan coba lagi.")
+        return False
+
+    finally:
+        if conn:
+            conn.close()
+
+# REGISTER
+def register(nama, nis, kelas, email, password):
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO login_users
+                (nama_lengkap, nis, kelas, email, password)
+                VALUES (%s,%s,%s,%s,%s)
+                RETURNING id_user""",
+                (nama, nis, kelas, email, password)
+            )
+            user_id = cursor.fetchone()[0]
+            conn.commit()
+
+        st.session_state.user = {
+            'id_user': user_id,
+            'nama_lengkap': nama,
+            'nis': nis,
+            'kelas': kelas,
+            'email': email
+        }
         go_to_page('prediction')
         return True
+
     except Exception as e:
-        st.error(f"Error Database: {e}") # Tambahkan ini agar tahu errornya apa
+        st.error(f"Error Database: {e}")
         return False
-# Fungsi logout
+
+    finally:
+        if conn:
+            conn.close()
+
+# LOGOUT
 def logout():
     st.session_state.user = None
     st.session_state.page = 'login'
     st.rerun()
 
-# Halaman Login
+# LOGIN PAGE
 def login_page():
+    wake_up_db()
+
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
@@ -274,6 +340,7 @@ def login_page():
             
             if submit:
                 if email and password:
+                    # ❌ TIDAK DIUBAH: tetap pakai login(email, password)
                     if login(email, password):
                         st.success("Login berhasil!")
                     else:
@@ -284,8 +351,10 @@ def login_page():
             if register_btn:
                 go_to_page('register')
 
-# Halaman Register
+# REGISTER PAGE
 def register_page():
+    wake_up_db()
+
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
@@ -319,7 +388,8 @@ def register_page():
             if login_btn:
                 go_to_page('login')
 
-# Halaman Prediksi
+
+# HALAMAN PREDIKSI
 def prediction_page():
     # Header
     col_header1, col_header2 = st.columns([3, 1])
@@ -508,7 +578,7 @@ def prediction_page():
             </div>
             """, unsafe_allow_html=True)
 
-# Router
+# ROUTER
 if st.session_state.page == 'login':
     login_page()
 elif st.session_state.page == 'register':
